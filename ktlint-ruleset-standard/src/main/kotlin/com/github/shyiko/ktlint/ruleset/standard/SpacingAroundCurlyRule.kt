@@ -13,20 +13,25 @@ import org.jetbrains.kotlin.psi.KtLambdaExpression
 
 class SpacingAroundCurlyRule : Rule("curly-spacing") {
 
-    override fun visit(node: ASTNode, autoCorrect: Boolean,
-            emit: (offset: Int, errorMessage: String, canBeAutoCorrected: Boolean) -> Unit) {
+    override fun visit(
+        node: ASTNode,
+        autoCorrect: Boolean,
+        emit: (offset: Int, errorMessage: String, canBeAutoCorrected: Boolean) -> Unit
+    ) {
         if (node is LeafPsiElement && !node.isPartOfString()) {
             val prevLeaf = PsiTreeUtil.prevLeaf(node, true)
             val nextLeaf = PsiTreeUtil.nextLeaf(node, true)
             val spacingBefore: Boolean
             val spacingAfter: Boolean
             if (node.textMatches("{")) {
-                spacingBefore = prevLeaf is PsiWhiteSpace || (prevLeaf?.node?.elementType == KtTokens.LPAR &&
+                spacingBefore = prevLeaf is PsiWhiteSpace || prevLeaf?.node?.elementType == KtTokens.AT || (prevLeaf?.node?.elementType == KtTokens.LPAR &&
                     (node.parent is KtLambdaExpression || node.parent.parent is KtLambdaExpression))
                 spacingAfter = nextLeaf is PsiWhiteSpace || nextLeaf?.node?.elementType == KtTokens.RBRACE
                 if (prevLeaf is PsiWhiteSpace &&
-                        !prevLeaf.textContains('\n') &&
-                        PsiTreeUtil.prevLeaf(prevLeaf, true)?.node?.elementType == KtTokens.LPAR) {
+                    !prevLeaf.textContains('\n') &&
+                    PsiTreeUtil.prevLeaf(prevLeaf, true)?.node?.let {
+                        it.elementType == KtTokens.LPAR || it.elementType == KtTokens.AT
+                    } == true) {
                     emit(node.startOffset, "Unexpected space before \"${node.text}\"", true)
                     if (autoCorrect) {
                         prevLeaf.node.treeParent.removeChild(prevLeaf.node)
@@ -41,11 +46,10 @@ class SpacingAroundCurlyRule : Rule("curly-spacing") {
                     node.parent.node.elementType == KtNodeTypes.CLASS_BODY)) {
                     emit(node.startOffset, "Unexpected newline before \"${node.text}\"", true)
                     if (autoCorrect) {
-                        (prevLeaf.node as LeafPsiElement).replaceWithText(" ")
+                        (prevLeaf.node as LeafPsiElement).rawReplaceWithText(" ")
                     }
                 }
-            } else
-            if (node.textMatches("}")) {
+            } else if (node.textMatches("}")) {
                 spacingBefore = prevLeaf is PsiWhiteSpace || prevLeaf?.node?.elementType == KtTokens.LBRACE
                 spacingAfter = nextLeaf == null || nextLeaf is PsiWhiteSpace || shouldNotToBeSeparatedBySpace(nextLeaf)
                 if (nextLeaf is PsiWhiteSpace && !nextLeaf.textContains('\n') &&

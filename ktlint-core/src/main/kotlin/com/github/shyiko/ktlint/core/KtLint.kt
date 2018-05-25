@@ -1,10 +1,13 @@
 package com.github.shyiko.ktlint.core
 
+import org.jetbrains.kotlin.cli.common.CLIConfigurationKeys
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
 import org.jetbrains.kotlin.com.intellij.lang.ASTNode
 import org.jetbrains.kotlin.com.intellij.mock.MockProject
 import org.jetbrains.kotlin.com.intellij.openapi.Disposable
+import org.jetbrains.kotlin.com.intellij.openapi.diagnostic.DefaultLogger
 import org.jetbrains.kotlin.com.intellij.openapi.extensions.ExtensionPoint
 import org.jetbrains.kotlin.com.intellij.openapi.extensions.Extensions.getArea
 import org.jetbrains.kotlin.com.intellij.openapi.util.Key
@@ -28,18 +31,30 @@ import org.jetbrains.kotlin.psi.psiUtil.startOffset
 import sun.reflect.ReflectionFactory
 import java.util.ArrayList
 import java.util.HashSet
+import org.jetbrains.kotlin.com.intellij.openapi.diagnostic.Logger as DiagnosticLogger
 
 object KtLint {
 
     val EDITOR_CONFIG_USER_DATA_KEY = Key<EditorConfig>("EDITOR_CONFIG")
     val ANDROID_USER_DATA_KEY = Key<Boolean>("ANDROID")
+    val FILE_PATH_USER_DATA_KEY = Key<String>("FILE_PATH")
 
     private val psiFileFactory: PsiFileFactory
     private val nullSuppression = { _: Int, _: String -> false }
 
     init {
+        // do not print anything to the stderr when lexer is unable to match input
+        class LoggerFactory : DiagnosticLogger.Factory {
+            override fun getLoggerInstance(p: String): DiagnosticLogger = object : DefaultLogger(null) {
+                override fun warn(message: String?, t: Throwable?) {}
+                override fun error(message: String?, vararg details: String?) {}
+            }
+        }
+        DiagnosticLogger.setFactory(LoggerFactory::class.java)
+        val compilerConfiguration = CompilerConfiguration()
+        compilerConfiguration.put(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY, MessageCollector.NONE)
         val project = KotlinCoreEnvironment.createForProduction(Disposable {},
-            CompilerConfiguration(), EnvironmentConfigFiles.EMPTY).project
+            compilerConfiguration, EnvironmentConfigFiles.JVM_CONFIG_FILES).project
         // everything below (up to PsiFileFactory.getInstance(...)) is to get AST mutations (`ktlint -F ...`) working
         // otherwise it's not needed
         val pomModel: PomModel = object : UserDataHolderBase(), PomModel {
@@ -129,43 +144,100 @@ object KtLint {
             throw ParseException(line, col, errorElement.errorDescription)
         }
         val rootNode = psiFile.node
-        rootNode.putUserData(EDITOR_CONFIG_USER_DATA_KEY, EditorConfig.fromMap(userData - "android"))
+        rootNode.putUserData(EDITOR_CONFIG_USER_DATA_KEY, EditorConfig.fromMap(userData - "android" - "file_path"))
         rootNode.putUserData(ANDROID_USER_DATA_KEY, userData["android"]?.toBoolean() ?: false)
+        rootNode.putUserData(FILE_PATH_USER_DATA_KEY, userData["file_path"])
         val isSuppressed = calculateSuppressedRegions(rootNode)
-        val r = flatten(ruleSets)
-        rootNode.visit { node ->
-            r.forEach { (id, rule) ->
-                if (!isSuppressed(node.startOffset, id)) {
-                    try {
-                        rule.visit(node, false) { offset, errorMessage, _ ->
-                            val (line, col) = positionByOffset(offset)
-                            cb(LintError(line, col, id, errorMessage))
+        visitor(rootNode, ruleSets).invoke { node, rule, fqRuleId ->
+            // fixme: enforcing suppression based on node.startOffset is wrong
+            // (not just because not all nodes are leaves but because rules are free to emit (and fix!) errors at any position)
+            if (!isSuppressed(node.startOffset, fqRuleId) || node === rootNode) {
+                try {
+                    rule.visit(node, false) { offset, errorMessage, _ ->
+                        val (line, col) = positionByOffset(offset)
+                        cb(LintError(line, col, fqRuleId, errorMessage))
+                    }
+                } catch (e: Exception) {
+                    val (line, col) = positionByOffset(node.startOffset)
+                    throw RuleExecutionException(line, col, fqRuleId, e)
+                }
+            }
+        }
+    }
+
+    private fun visitor(
+        rootNode: ASTNode,
+        ruleSets: Iterable<RuleSet>,
+        concurrent: Boolean = true,
+        filter: (fqRuleId: String) -> Boolean = { true }
+    ): ((node: ASTNode, rule: Rule, fqRuleId: String) -> Unit) -> Unit {
+        val fqrsRestrictedToRoot = mutableListOf<Pair<String, Rule>>()
+        val fqrs = mutableListOf<Pair<String, Rule>>()
+        val fqrsExpectedToBeExecutedLastOnRoot = mutableListOf<Pair<String, Rule>>()
+        val fqrsExpectedToBeExecutedLast = mutableListOf<Pair<String, Rule>>()
+        for (ruleSet in ruleSets) {
+            val prefix = if (ruleSet.id === "standard") "" else "${ruleSet.id}:"
+            for (rule in ruleSet) {
+                val fqRuleId = "$prefix${rule.id}"
+                if (!filter(fqRuleId)) {
+                    continue
+                }
+                val fqr = fqRuleId to rule
+                when {
+                    rule is Rule.Modifier.Last -> fqrsExpectedToBeExecutedLast.add(fqr)
+                    rule is Rule.Modifier.RestrictToRootLast -> fqrsExpectedToBeExecutedLastOnRoot.add(fqr)
+                    rule is Rule.Modifier.RestrictToRoot -> fqrsRestrictedToRoot.add(fqr)
+                    else -> fqrs.add(fqr)
+                }
+            }
+        }
+        return { visit ->
+            for ((fqRuleId, rule) in fqrsRestrictedToRoot) {
+                visit(rootNode, rule, fqRuleId)
+            }
+            if (concurrent) {
+                rootNode.visit { node ->
+                    for ((fqRuleId, rule) in fqrs) {
+                        visit(node, rule, fqRuleId)
+                    }
+                }
+            } else {
+                for ((fqRuleId, rule) in fqrs) {
+                    rootNode.visit { node ->
+                        visit(node, rule, fqRuleId)
+                    }
+                }
+            }
+            for ((fqRuleId, rule) in fqrsExpectedToBeExecutedLastOnRoot) {
+                visit(rootNode, rule, fqRuleId)
+            }
+            if (!fqrsExpectedToBeExecutedLast.isEmpty()) {
+                if (concurrent) {
+                    rootNode.visit { node ->
+                        for ((fqRuleId, rule) in fqrsExpectedToBeExecutedLast) {
+                            visit(node, rule, fqRuleId)
                         }
-                    } catch (e: Exception) {
-                        val (line, col) = positionByOffset(node.startOffset)
-                        throw RuleExecutionException(line, col, id, e)
+                    }
+                } else {
+                    for ((fqRuleId, rule) in fqrsExpectedToBeExecutedLast) {
+                        rootNode.visit { node ->
+                            visit(node, rule, fqRuleId)
+                        }
                     }
                 }
             }
         }
     }
 
-    private fun flatten(ruleSets: Iterable<RuleSet>) = ArrayList<Pair<String, Rule>>().apply {
-        ruleSets.forEach { ruleSet ->
-            val prefix = if (ruleSet.id === "standard") "" else "${ruleSet.id}:"
-            ruleSet.forEach { rule -> add("$prefix${rule.id}" to rule) }
-        }
-    }
-
     private fun calculateLineColByOffset(text: String): (offset: Int) -> Pair<Int, Int> {
-        var i = 0
+        var i = -1
         val e = text.length
         val arr = ArrayList<Int>()
         do {
-            arr.add(i)
-            i = text.indexOf('\n', i) + 1
-        } while (i != 0 && i != e)
-        arr.add(e)
+            arr.add(i + 1)
+            i = text.indexOf('\n', i + 1)
+        } while (i != -1)
+        arr.add(e + if (arr.last() == e) 1 else 0)
         val segmentTree = SegmentTree(arr.toTypedArray())
         return { offset ->
             val line = segmentTree.indexOf(offset)
@@ -199,8 +271,12 @@ object KtLint {
     fun format(text: String, ruleSets: Iterable<RuleSet>, cb: (e: LintError, corrected: Boolean) -> Unit): String =
         format(text, ruleSets, emptyMap<String, String>(), cb, script = false)
 
-    fun format(text: String, ruleSets: Iterable<RuleSet>, userData: Map<String, String>,
-        cb: (e: LintError, corrected: Boolean) -> Unit): String = format(text, ruleSets, userData, cb, script = false)
+    fun format(
+        text: String,
+        ruleSets: Iterable<RuleSet>,
+        userData: Map<String, String>,
+        cb: (e: LintError, corrected: Boolean) -> Unit
+    ): String = format(text, ruleSets, userData, cb, script = false)
 
     /**
      * Fix style violations.
@@ -215,8 +291,12 @@ object KtLint {
     fun formatScript(text: String, ruleSets: Iterable<RuleSet>, cb: (e: LintError, corrected: Boolean) -> Unit): String =
         format(text, ruleSets, emptyMap(), cb, script = true)
 
-    fun formatScript(text: String, ruleSets: Iterable<RuleSet>, userData: Map<String, String>,
-        cb: (e: LintError, corrected: Boolean) -> Unit): String = format(text, ruleSets, userData, cb, script = true)
+    fun formatScript(
+        text: String,
+        ruleSets: Iterable<RuleSet>,
+        userData: Map<String, String>,
+        cb: (e: LintError, corrected: Boolean) -> Unit
+    ): String = format(text, ruleSets, userData, cb, script = true)
 
     private fun format(
         text: String,
@@ -238,55 +318,57 @@ object KtLint {
             throw ParseException(line, col, errorElement.errorDescription)
         }
         val rootNode = psiFile.node
-        rootNode.putUserData(EDITOR_CONFIG_USER_DATA_KEY, EditorConfig.fromMap(userData - "android"))
+        rootNode.putUserData(EDITOR_CONFIG_USER_DATA_KEY, EditorConfig.fromMap(userData - "android" - "file_path"))
         rootNode.putUserData(ANDROID_USER_DATA_KEY, userData["android"]?.toBoolean() ?: false)
+        rootNode.putUserData(FILE_PATH_USER_DATA_KEY, userData["file_path"])
         var isSuppressed = calculateSuppressedRegions(rootNode)
-        val r = flatten(ruleSets)
-        var autoCorrect = false
-        rootNode.visit { node ->
-            r.forEach { (id, rule) ->
-                if (!isSuppressed(node.startOffset, id)) {
+        var tripped = false
+        var mutated = false
+        visitor(rootNode, ruleSets, concurrent = false)
+            .invoke { node, rule, fqRuleId ->
+                // fixme: enforcing suppression based on node.startOffset is wrong
+                // (not just because not all nodes are leaves but because rules are free to emit (and fix!) errors at any position)
+                if (!isSuppressed(node.startOffset, fqRuleId) || node === rootNode) {
                     try {
-                        rule.visit(node, false) { offset, errorMessage, canBeAutoCorrected ->
+                        rule.visit(node, true) { _, _, canBeAutoCorrected ->
+                            tripped = true
                             if (canBeAutoCorrected) {
-                                autoCorrect = true
-                            }
-                            val (line, col) = positionByOffset(offset)
-                            cb(LintError(line, col, id, errorMessage), canBeAutoCorrected)
-                        }
-                    } catch (e: Exception) {
-                        val (line, col) = positionByOffset(node.startOffset)
-                        throw RuleExecutionException(line, col, id, e)
-                    }
-                }
-            }
-        }
-        if (autoCorrect) {
-            rootNode.visit { node ->
-                r.forEach { (id, rule) ->
-                    if (!isSuppressed(node.startOffset, id)) {
-                        try {
-                            rule.visit(node, true) { _, _, canBeAutoCorrected ->
-                                if (canBeAutoCorrected && isSuppressed !== nullSuppression) {
+                                mutated = true
+                                if (isSuppressed !== nullSuppression) {
                                     isSuppressed = calculateSuppressedRegions(rootNode)
                                 }
                             }
-                        } catch (e: Exception) {
-                            // line/col cannot be reliably mapped as exception might originate from a node not present
-                            // in the original AST
-                            throw RuleExecutionException(0, 0, id, e)
                         }
+                    } catch (e: Exception) {
+                        // line/col cannot be reliably mapped as exception might originate from a node not present
+                        // in the original AST
+                        throw RuleExecutionException(0, 0, fqRuleId, e)
                     }
                 }
             }
-            return rootNode.text.replace("\n", determineLineSeparator(text))
+        if (tripped) {
+            visitor(rootNode, ruleSets).invoke { node, rule, fqRuleId ->
+                // fixme: enforcing suppression based on node.startOffset is wrong
+                // (not just because not all nodes are leaves but because rules are free to emit (and fix!) errors at any position)
+                if (!isSuppressed(node.startOffset, fqRuleId) || node === rootNode) {
+                    try {
+                        rule.visit(node, false) { offset, errorMessage, _ ->
+                            val (line, col) = positionByOffset(offset)
+                            cb(LintError(line, col, fqRuleId, errorMessage), false)
+                        }
+                    } catch (e: Exception) {
+                        val (line, col) = positionByOffset(node.startOffset)
+                        throw RuleExecutionException(line, col, fqRuleId, e)
+                    }
+                }
+            }
         }
-        return text
+        return if (mutated) rootNode.text.replace("\n", determineLineSeparator(text)) else text
     }
 
     private fun calculateLineBreakOffset(fileContent: String): (offset: Int) -> Int {
         val arr = ArrayList<Int>()
-        var i: Int = 0
+        var i = 0
         do {
             arr.add(i)
             i = fileContent.indexOf("\r\n", i + 1)
@@ -296,13 +378,8 @@ object KtLint {
             SegmentTree(arr.toTypedArray()).let { return { offset -> it.indexOf(offset) } } else { _ -> 0 }
     }
 
-    private fun determineLineSeparator(fileContent: String): String {
-        val i = fileContent.lastIndexOf('\n')
-        if (i == -1) {
-            return if (fileContent.lastIndexOf('\r') == -1) System.getProperty("line.separator") else "\r"
-        }
-        return if (i != 0 && fileContent[i] == '\r') "\r\n" else "\n"
-    }
+    private fun determineLineSeparator(fileContent: String) =
+        if (fileContent.lastIndexOf('\r') != -1) "\r\n" else "\n"
 
     /**
      * @param range zero-based range of lines where lint errors should be suppressed
@@ -329,8 +406,8 @@ object KtLint {
                             val commentText = text.removePrefix("/*").removeSuffix("*/").trim()
                             parseHintArgs(commentText, "ktlint-disable")?.apply {
                                 open.add(SuppressionHint(IntRange(node.startOffset, node.startOffset), HashSet(this)))
-                            } ?:
-                            parseHintArgs(commentText, "ktlint-enable")?.apply {
+                            }
+                            ?: parseHintArgs(commentText, "ktlint-enable")?.apply {
                                 // match open hint
                                 val disabledRules = HashSet(this)
                                 val openHintIndex = open.indexOfLast { it.disabledRules == disabledRules }
@@ -363,7 +440,7 @@ object KtLint {
             private fun splitCommentBySpace(comment: String) =
                 comment.replace(Regex("\\s"), " ").replace(" {2,}", " ").split(" ")
 
-            private fun <T>List<T>.tail() = this.subList(1, this.size)
+            private fun <T> List<T>.tail() = this.subList(1, this.size)
         }
     }
 

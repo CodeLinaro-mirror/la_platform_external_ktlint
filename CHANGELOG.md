@@ -2,6 +2,157 @@
 All notable changes to this project will be documented in this file.  
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.23.0] - 2018-05-02
+
+### Added
+- `comment-spacing` ([#198](https://github.com/shyiko/ktlint/pull/198)),  
+  `filename` ([#194](https://github.com/shyiko/ktlint/pull/194)) rules.
+- `parameter-list-wrapping` left parenthesis placement check ([#201](https://github.com/shyiko/ktlint/pull/201)).
+- `parameter-list-wrapping` auto-correction when `max_line_length` is exceeded ([#200](https://github.com/shyiko/ktlint/pull/200)).
+
+### Fixed
+- "Unused import" false positive (x.y.zNNN import inside x.y.z package) ([#204](https://github.com/shyiko/ktlint/issues/204)).
+
+### Changed
+- `kotlin-compiler` version to 1.2.41 (from 1.2.40).
+
+## [0.22.0] - 2018-04-22
+
+### Added
+- `--apply-to-idea-project` (as an alternative to (global) `--apply-to-idea`) ([#178](https://github.com/shyiko/ktlint/issues/178)).
+- Check to verify that annotations are placed before the modifiers ([#183](https://github.com/shyiko/ktlint/pull/183)).
+- Access to PsiFile location information ([#194](https://github.com/shyiko/ktlint/pull/194)).
+
+### Fixed
+- `--format` commenting out operators (`chain-wrapping` rule) ([#193](https://github.com/shyiko/ktlint/pull/193)).
+
+### Changed
+- `indent` rule (`continuation_indent_size` is now ignored) ([#171](https://github.com/shyiko/ktlint/issues/171)).  
+NOTE: if you have a custom `continuation_indent_size` (and `gcd(indent_size, continuation_indent_size) == 1`) ktlint
+won't check the indentation.
+- `--apply-to-idea` to inherit "Predefined style / Kotlin style guide" (Kotlin plugin 1.2.20+).
+- `kotlin-compiler` version to 1.2.40 (from 1.2.30).
+
+## [0.21.0] - 2018-03-29
+
+### Changed
+- `indent` rule to ignore `where <type constraint list>` clause ([#180](https://github.com/shyiko/ktlint/issues/180)).
+
+## [0.20.0] - 2018-03-20
+
+### Added
+- Ability to load 3rd party reporters from the command-line (e.g. `--reporter=<name>,artifact=<group_id>:<artifact_id>:<version>`) ([#176](https://github.com/shyiko/ktlint/issues/176)).
+- `--ruleset`/`--reporter` dependency tree validation.
+
+### Fixed
+- Handling of spaces in `--reporter=...,output=<path_to_a_file>` ([#177](https://github.com/shyiko/ktlint/issues/177)).
+- `+`, `-`, `*`, `/`, `%`, `&&`, `||` wrapping ([#168](https://github.com/shyiko/ktlint/issues/168)).
+
+### Changed
+- `comma-spacing` rule to be more strict ([#173](https://github.com/shyiko/ktlint/issues/173)).
+- `no-line-break-after-else` rule to allow multi-line `if/else` without curly braces. 
+
+## [0.19.0] - 2018-03-04
+
+### Changed
+- Lambda formatting: if lambda is assigned a label, there should be no space between the label and the opening curly brace ([#167](https://github.com/shyiko/ktlint/issues/167)).  
+
+## [0.18.0] - 2018-03-01
+
+### Added
+- Java 9 support ([#152](https://github.com/shyiko/ktlint/issues/152)).
+
+### Changed
+- `kotlin-compiler` version to 1.2.30 (from 1.2.20).
+
+## [0.17.1] - 2018-02-28
+
+### Fixed
+- `Internal Error (parameter-list-wrapping)` when `indent_size=unset` ([#165](https://github.com/shyiko/ktlint/issues/165)). 
+
+## [0.17.0] - 2018-02-28
+
+### Fixed
+- `+`/`-` wrapping inside `catch` block, after `else` and `if (..)` ([#160](https://github.com/shyiko/ktlint/issues/160)). 
+- Multi-line parameter declaration indentation ([#161](https://github.com/shyiko/ktlint/issues/161)).
+- Expected indentation reported by `indent` rule.
+
+### Changed
+- Error code returned by `ktlint --format/-F` when some of the errors cannot be auto-corrected (previously it was 0 instead of expected 1) ([#162](https://github.com/shyiko/ktlint/issues/162)). 
+
+## [0.16.1] - 2018-02-27
+
+### Fixed
+- Handling of negative number condition in `when` block ([#160](https://github.com/shyiko/ktlint/issues/160)). 
+
+## [0.16.0] - 2018-02-27
+
+### Added
+- `parameter-list-wrapping` rule ([#130](https://github.com/shyiko/ktlint/issues/130)).
+- `+`, `-`, `*`, `/`, `%`, `&&`, `||` wrapping check (now part of `chain-wrapping` rule).
+
+### Fixed
+- Unused `componentN` import (where N > 5) false positive ([#142](https://github.com/shyiko/ktlint/issues/142)).
+- max-line-length error suppression ([#158](https://github.com/shyiko/ktlint/issues/158)). 
+
+### Changed
+- `modifier-order` rule to match official [Kotlin Coding Conventions](https://kotlinlang.org/docs/reference/coding-conventions.html#modifiers) ([#146](https://github.com/shyiko/ktlint/issues/146))  
+(`override` modifier should be placed before `suspend`/`tailrec`, not after) 
+
+## [0.15.1] - 2018-02-14
+
+### Fixed
+- Race condition when multiple rules try to modify AST node that gets detached as a result of mutation ([#154](https://github.com/shyiko/ktlint/issues/154)).
+
+## [0.15.0] - 2018-01-18
+
+### Added
+- `no-line-break-after-else` rule ([#125](https://github.com/shyiko/ktlint/issues/125)).
+
+### Changed
+- `kotlin-compiler` version to 1.2.20 (from 1.2.0).
+
+## [0.14.0] - 2017-11-30
+
+### Changed
+- `continuation_indent_size` to 4 when `--android` profile is used ([android/kotlin-guides#37](https://github.com/android/kotlin-guides/issues/37)). 
+
+### Fixed
+- Maven integration ([#117](https://github.com/shyiko/ktlint/issues/117)).
+
+## [0.13.0] - 2017-11-28
+
+### Added
+- `no-line-break-before-assignment` ([#105](https://github.com/shyiko/ktlint/issues/105)),  
+  `chain-wrapping` ([#23](https://github.com/shyiko/ktlint/issues/23))
+(when wrapping chained calls `.`, `?.` and `?:` should be placed on the next line),  
+  `range-spacing` (no spaces around range (`..`) operator) rules.
+- `--print-ast` CLI option which can be used to dump AST of the file   
+(see [README / Creating a ruleset / AST](https://github.com/shyiko/ktlint#ast) for more details)
+- `--color` CLI option for colored output (where supported, e.g. --print-ast, default (plain) reporter, etc) 
+
+### Changed
+- `.editorconfig` property resolution.   
+An explicit `[*.{kt,kts}]` is not required anymore (ktlint looks for sections
+containing `*.kt` (or `*.kts`) and will fallback to `[*]` whenever property cannot be found elsewhere).   
+Also, a search for .editorconfig will no longer stop on first (closest) `.editorconfig` (unless it contains `root=true`). 
+- `max-line-length` rule to assume `max_line_length=100` when `ktlint --android ...` is used  
+(per [Android Kotlin Style Guide](https://android.github.io/kotlin-guides/style.html)).  
+- `kotlin-compiler` version to 1.2.0 (from 1.1.51).
+
+### Fixed
+- `no-empty-class-body` auto-correction at the end of file ([#109](https://github.com/shyiko/ktlint/issues/109)).
+- `max-line-length` rule when applied to KDoc ([#112](https://github.com/shyiko/ktlint/issues/112))  
+(previously KDoc was subject to `max-line-length` even though regular comments were not).
+- Spacing around `=` in @annotation|s (`op-spacing`).
+- Spacing around generic type parameters of functions (e.g. `fun <T>f(): T {}` -> `fun <T> f(): T {}`).
+- `no-consecutive-blank-lines` not triggering at the end of file (when exactly 2 blank lines are present) ([#108](https://github.com/shyiko/ktlint/issues/108)) 
+- `indent` `continuation_indent_size % indent_size != 0` case ([#76](https://github.com/shyiko/ktlint/issues/76))
+- `indent` rule skipping first parameter indentation check. 
+- `final-newline` rule in the context of kotlin script.
+- Git hook (previously files containing space character (among others) in their names were ignored)  
+- Exit code when file cannot be linted due to the invalid syntax or internal error.
+
 ## [0.12.1] - 2017-11-13
 
 ### Fixed
@@ -243,6 +394,20 @@ set in `[*{kt,kts}]` section).
 
 ## 0.1.0 - 2016-07-27
 
+[0.23.0]: https://github.com/shyiko/ktlint/compare/0.22.0...0.23.0
+[0.22.0]: https://github.com/shyiko/ktlint/compare/0.21.0...0.22.0
+[0.21.0]: https://github.com/shyiko/ktlint/compare/0.20.0...0.21.0
+[0.20.0]: https://github.com/shyiko/ktlint/compare/0.19.0...0.20.0
+[0.19.0]: https://github.com/shyiko/ktlint/compare/0.18.0...0.19.0
+[0.18.0]: https://github.com/shyiko/ktlint/compare/0.17.1...0.18.0
+[0.17.1]: https://github.com/shyiko/ktlint/compare/0.17.0...0.17.1
+[0.17.0]: https://github.com/shyiko/ktlint/compare/0.16.1...0.17.0
+[0.16.1]: https://github.com/shyiko/ktlint/compare/0.16.0...0.16.1
+[0.16.0]: https://github.com/shyiko/ktlint/compare/0.15.1...0.16.0
+[0.15.1]: https://github.com/shyiko/ktlint/compare/0.15.0...0.15.1
+[0.15.0]: https://github.com/shyiko/ktlint/compare/0.14.0...0.15.0
+[0.14.0]: https://github.com/shyiko/ktlint/compare/0.13.0...0.14.0
+[0.13.0]: https://github.com/shyiko/ktlint/compare/0.12.1...0.13.0
 [0.12.1]: https://github.com/shyiko/ktlint/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/shyiko/ktlint/compare/0.11.1...0.12.0
 [0.11.1]: https://github.com/shyiko/ktlint/compare/0.11.0...0.11.1
